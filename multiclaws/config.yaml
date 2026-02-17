@@ -1,0 +1,102 @@
+# TeamClaws v3.2 — Default Configuration
+# GCP Free Tier target: e2-micro (1 vCPU, 1GB RAM)
+# Override any value with environment variables (see .env.example)
+
+# ─────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────
+log_level: INFO          # DEBUG | INFO | WARNING | ERROR
+log_max_bytes: 10485760  # 10MB
+log_backup_count: 3
+
+# ─────────────────────────────────────────
+# WATCHDOG  (§3)
+# ─────────────────────────────────────────
+watchdog:
+  poll_interval_seconds: 5
+  cpu_kill_threshold_percent: 90.0
+  cpu_kill_sustained_seconds: 10
+  ram_kill_threshold_mb: 400        # Hard kill at 400MB (leave headroom in 1GB VM)
+  heartbeat_timeout_seconds: 15
+  restart_backoff_seconds: [5, 15, 60]
+  max_restarts: 3
+
+# ─────────────────────────────────────────
+# MEMORY  (§5)
+# ─────────────────────────────────────────
+memory:
+  short_term_maxlen: 20
+  summarize_every_n_turns: 15
+  summary_compression_ratio: 0.33
+
+# ─────────────────────────────────────────
+# COST BUDGET  (§4-3)
+# ─────────────────────────────────────────
+budget:
+  daily_usd: 0.50         # Alert at 80% → $0.40/day
+  weekly_usd: 3.00
+  alert_threshold_percent: 80.0
+
+# ─────────────────────────────────────────
+# LLM PROVIDERS  (§4-1)
+# API keys should be set via environment variables, not here.
+# Set enabled: true only for providers you have keys for.
+# ─────────────────────────────────────────
+providers:
+  groq:
+    enabled: false         # Free tier available: groq.com
+    models: [llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768]
+    priority: 0.9          # Prefer Groq: fastest, cheapest
+    cost_per_1k_input: 0.00006
+    cost_per_1k_output: 0.00008
+    max_requests_per_minute: 30
+
+  google:
+    enabled: false         # Free tier: 15 req/min on gemini-1.5-flash
+    models: [gemini-2.0-flash, gemini-1.5-flash, gemini-1.5-pro]
+    priority: 0.8
+    cost_per_1k_input: 0.0001
+    cost_per_1k_output: 0.0004
+    max_requests_per_minute: 15
+
+  openai:
+    enabled: false
+    models: [gpt-4o-mini, gpt-4o]
+    priority: 0.6
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.0006
+    max_requests_per_minute: 60
+
+  anthropic:
+    enabled: false
+    models: [claude-haiku-4-5-20251001, claude-sonnet-4-5-20250929]
+    priority: 0.7
+    cost_per_1k_input: 0.00025
+    cost_per_1k_output: 0.00125
+    max_requests_per_minute: 60
+
+  mistral:
+    enabled: false
+    models: [mistral-small-latest, mistral-large-latest, open-mistral-nemo]
+    priority: 0.5
+    cost_per_1k_input: 0.0002
+    cost_per_1k_output: 0.0006
+    max_requests_per_minute: 60
+
+# ─────────────────────────────────────────
+# AGENT DEFAULTS
+# ─────────────────────────────────────────
+max_tool_iterations: 5
+sandbox_timeout_seconds: 5
+
+# ─────────────────────────────────────────
+# TELEGRAM (optional secondary interface)
+# Set TELEGRAM_BOT_TOKEN in .env
+# ─────────────────────────────────────────
+telegram_allowed_users: []  # Empty = all users allowed (set specific user IDs for security)
+
+# ─────────────────────────────────────────
+# n8n AUTOMATION (optional)
+# Set N8N_WEBHOOK_BASE in .env
+# ─────────────────────────────────────────
+# n8n_webhook_base: "http://localhost:5678/webhook"

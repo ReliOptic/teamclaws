@@ -1,0 +1,43 @@
+# TeamClaws — .gitignore
+
+# Environment (NEVER commit API keys)
+.env
+.env.local
+
+# Data and logs (machine-specific)
+data/
+logs/
+workspace/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Windows path artifacts (corrupted filenames from Git Bash)
+C:Users*/
+C?Users*/
+
+# Claude Code internal
+.claude/

@@ -1,0 +1,9 @@
+# TeamClaws v3.2 — Pinned dependencies
+# GCP Free Tier compatible (Ubuntu 22.04+, Python 3.10+)
+# No frameworks: no Django, FastAPI, LangChain, CrewAI, LangGraph
+
+httpx>=0.27.0,<1.0
+aiosqlite>=0.20.0,<1.0
+pyyaml>=6.0.1,<7.0
+psutil>=5.9.0,<7.0
+aiogram>=3.7.0,<4.0

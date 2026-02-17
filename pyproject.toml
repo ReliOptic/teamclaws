@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "teamclaws"
+version = "3.2.0"
+description = "TeamClaws v3.2 — PicoClaw-Native Multi-Agent AI System"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27.0,<1.0",
+    "aiosqlite>=0.20.0,<1.0",
+    "pyyaml>=6.0.1,<7.0",
+    "psutil>=5.9.0,<7.0",
+    "aiogram>=3.7.0,<4.0",
+]
+
+[project.scripts]
+teamclaws = "multiclaws.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["multiclaws*"]
+
+[tool.setuptools.package-data]
+"multiclaws" = ["config.yaml", "memory/schema.sql"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
