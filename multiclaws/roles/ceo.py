@@ -1,14 +1,15 @@
 """
-CEO PicoClaw: Chairman-CEO-Expert 3계층 구조의 중재자. (§6-2 v3.3)
+CEO PicoClaw: Chairman-CEO-Boardroom 3계층 구조의 중재자. (§6-2 v3.4)
 
-역할 정의:
-  - Chairman(사용자)의 모호한 의도를 구체적 Task로 변환(Alignment)
-  - "누가 이 일을 해야 하는가?" 판단 후 Expert 호출 (Blocking = 보고 체계)
-  - 스스로 실행하지 않음. 결과를 수신·종합하여 Chairman에게 보고
+이사회 프로토콜 (Boardroom Protocol):
+  1. INTERPRET  — Chairman의 의도 파악 (한 번만 되물음)
+  2. CFO CHECK  — 예산·모델 배정 결재
+  3. CSO CHECK  — 보안 정책 검토 (거부권)
+  4. DELEGATE   — CTO(코드) 또는 CKO(리서치) 또는 직접 처리
+  5. RETRY      — Expert 실패 시 2-Strike Rule → Chairman 보고
+  6. REPORT     — 결과 종합 후 Chairman에게 보고
 
-의도적으로 Blocking:
-  _inline_dispatch()는 하위 에이전트 결과를 기다린 뒤 CEO가 종합.
-  백그라운드 루프 없음 — OS 스케줄러(cron/at)를 쓰는 것이 더 지능적.
+CEO는 직접 코드를 실행하지 않는다. 판단하고 위임한다.
 """
 from __future__ import annotations
 
@@ -19,6 +20,8 @@ from multiclaws.core.picoclaw import PicoClaw
 from multiclaws.llm.router import LLMRouter
 from multiclaws.memory.context_builder import build_context
 from multiclaws.memory.summarizer import maybe_summarize
+from multiclaws.roles.cfo import CFO
+from multiclaws.roles.cso import CSO
 from multiclaws.roles.permissions import get_tools_for_role
 from multiclaws.tools.builtins.delegate import DelegateTaskTool
 from multiclaws.tools.registry import Tool, get_registry
@@ -28,30 +31,27 @@ from multiclaws.tools.registry import Tool, get_registry
 class CreatePlanTool(Tool):
     """
     CEO가 Chairman에게 실행 계획을 제시하고 Task Queue에 등록한다.
-    CEO 자신이 실행하는 게 아니라 Expert 순서와 의존관계를 정의한다.
+    각 단계는 CSO/CFO 결재 후 CTO/CKO에게 위임된다.
     """
     name = "create_plan"
     description = (
-        "Break a complex goal into ordered subtasks, assign each to an expert agent, "
-        "and persist to the task queue with dependency links. "
-        "Use delegate_task to actually execute each step after planning."
+        "Break a complex goal into ordered subtasks for expert agents. "
+        "Each step specifies agent (cto/cko/communicator) and task payload. "
+        "Dependency links prevent steps from running before predecessors complete."
     )
     parameters = {
         "type": "object",
         "properties": {
-            "goal": {"type": "string", "description": "High-level goal to achieve"},
+            "goal": {"type": "string"},
             "steps": {
                 "type": "array",
-                "description": "Ordered list of expert subtasks",
                 "items": {
                     "type": "object",
                     "properties": {
                         "agent":           {"type": "string",
-                                            "description": "researcher | coder | communicator"},
-                        "task":            {"type": "object",
-                                            "description": "Task payload for the agent"},
-                        "depends_on_step": {"type": "integer",
-                                            "description": "0-based index of step this depends on"},
+                                            "description": "cto | cko | communicator"},
+                        "task":            {"type": "object"},
+                        "depends_on_step": {"type": "integer"},
                     },
                     "required": ["agent", "task"],
                 },
@@ -80,76 +80,157 @@ class CreatePlanTool(Tool):
 
 
 # ── System Prompt ──────────────────────────────────────────────────────────────
-CEO_SYSTEM = """You are the CEO of TeamClaws — the Chief of Staff between the user (Chairman) and expert agents.
+CEO_SYSTEM = """You are the CEO of TeamClaws — Chief of Staff in a Boardroom structure.
 
-Your role:
-1. UNDERSTAND: Clarify the Chairman's intent. Ask exactly one clarifying question if the goal is ambiguous.
-2. JUDGE: Decide whether to answer directly (simple) or delegate to experts (complex).
-3. DELEGATE: Use delegate_task to assign work to the right expert. WAIT for their result.
-4. REPORT: Synthesize expert results into a clear, concise answer for the Chairman.
+Hierarchy:
+  Chairman (User) → CEO (You) → CTO | CKO | Communicator
 
-Expert agents available:
-- researcher: web research, URL fetching, information gathering
-- coder: code writing, file operations, shell execution, run_python
-- communicator: message drafting, documentation, notifications
+Your exact protocol for every request:
+1. INTERPRET: State your understanding. If ambiguous, ask exactly ONE clarifying question.
+2. PLAN: For complex tasks (3+ steps), use create_plan first. For simple tasks, go to step 3.
+3. DELEGATE: Use delegate_task to assign work — CTO for code/files, CKO for research.
+4. WAIT: Block until expert returns result. You do not execute code yourself.
+5. REPORT: Synthesize results clearly for the Chairman.
 
-Decision rules:
-- Direct answer: factual questions, explanations, opinions — no tool needed
-- Delegate: anything requiring code execution, web access, file I/O, multi-step workflows
-- Plan first: use create_plan for goals with 3+ steps, then execute each step via delegate_task
+Expert roster:
+- cto:          Code writing, debugging, file I/O, shell commands, technical architecture
+- cko:          Web research, URL fetching, information gathering, knowledge synthesis
+- communicator: Drafting messages, documentation, reports, notifications
 
-You do NOT run code or fetch URLs yourself. You coordinate.
-When delegating, always wait for the result and include it in your response to the Chairman.
-Be concise. The Chairman is busy."""
+Rules:
+- You NEVER run code or fetch URLs yourself
+- If an expert fails twice (2-Strike Rule), report to Chairman with error details
+- CFO manages your model/budget; CSO enforces security — both are already active
+- Be concise. Chairman is busy. One paragraph max unless detail was requested."""
 
 
 # ── CEOAgent ───────────────────────────────────────────────────────────────────
 class CEOAgent(PicoClaw):
     role = "ceo"
-    description = "Chief of Staff — translates Chairman intent into Expert tasks, synthesizes results"
+    description = "Chief of Staff — Boardroom orchestrator with CFO/CSO governance"
+
+    # 2-Strike retry tracking: {task_hash: attempt_count}
+    _retry_counts: dict[str, int] = {}
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._router: LLMRouter | None = None
         self._registry = None
+        self._cfo: CFO | None = None
+        self._cso: CSO | None = None
 
     def run(self) -> None:
-        self._router = LLMRouter(self.config)
+        self._router   = LLMRouter(self.config)
         self._registry = get_registry()
-        # Wire delegate dispatcher (Blocking = 보고 체계 안전장치)
+        self._cfo      = CFO(self.config, self.store)
+        self._cso      = CSO(self.store)
         self._inject_delegate_dispatcher()
-        # CreatePlanTool needs store — register after store is ready
         self._registry.register(CreatePlanTool(store=self.store))
         super().run()
 
     def _inject_delegate_dispatcher(self) -> None:
-        """Wire inline blocking dispatcher into DelegateTaskTool."""
+        """Wire inline blocking dispatcher (보고 체계 안전장치)."""
         delegate_tool = self._registry.get("delegate_task")
         if isinstance(delegate_tool, DelegateTaskTool):
             delegate_tool._dispatcher = self._inline_dispatch
 
     async def _inline_dispatch(self, agent_role: str, task: dict) -> dict:
         """
-        Dispatch a task to an Expert and BLOCK until result is received.
-        This is intentional — CEO must wait for Expert's report before
-        synthesizing a response for the Chairman.
+        Dispatch to an Expert and BLOCK until result received.
+        Wraps with CFO model decision + CSO security review.
         """
         from multiclaws.roles.coder import CoderAgent
         from multiclaws.roles.researcher import ResearcherAgent
+        from multiclaws.roles.communicator import CommunicatorAgent
 
+        # CTO/CKO naming aliases map to agent classes
         agent_map: dict[str, type] = {
-            "researcher": ResearcherAgent,
-            "coder":      CoderAgent,
+            "cto":          CoderAgent,
+            "coder":        CoderAgent,
+            "cko":          ResearcherAgent,
+            "researcher":   ResearcherAgent,
+            "communicator": CommunicatorAgent,
         }
         cls = agent_map.get(agent_role)
         if cls is None:
-            return {"error": f"Unknown expert role: '{agent_role}'. "
-                             f"Available: {list(agent_map)}"}
+            return {"error": f"Unknown expert: '{agent_role}'. "
+                             f"Available: cto, cko, communicator"}
 
+        task_text = json.dumps(task)
+
+        # ── CFO: model allocation ────────────────────────────────────────────
+        cfo_decision = self._cfo.allocate(task_text, agent_role) if self._cfo else None
+        if cfo_decision and not cfo_decision.approved:
+            return {
+                "error": f"CFO veto: {cfo_decision.reason}",
+                "cfo_action": "budget_exceeded",
+            }
+
+        # ── CSO: security review ─────────────────────────────────────────────
+        cso_decision = self._cso.review(task_text, agent_role=agent_role) if self._cso else None
+        if cso_decision and not cso_decision.approved:
+            return {
+                "error": f"CSO veto: {'; '.join(cso_decision.findings)}",
+                "cso_action": "security_violation",
+                "risk_level": cso_decision.risk_level,
+            }
+
+        # ── Instantiate expert with CFO-allocated model parameters ───────────
         expert = cls(config=self.config)
-        expert._store = self.store          # share store for cost/audit logging
-        expert._router = LLMRouter(self.config)
+        expert._store  = self.store
+        expert._router = LLMRouter(self.config, self.store)
+
+        # Pass CFO's task_type override to the expert via task payload
+        if cfo_decision:
+            task = {**task, "_task_type": cfo_decision.task_type,
+                    "_max_tokens": cfo_decision.max_tokens}
+
         return await expert.handle_task(task)
+
+    # ── 2-Strike retry wrapper ─────────────────────────────────────────────────
+    async def _dispatch_with_retry(
+        self, agent_role: str, task: dict, task_key: str
+    ) -> dict:
+        """
+        2-Strike Rule:
+          Attempt 1: dispatch normally
+          Attempt 2 (on error): same task, different framing hint
+          Attempt 3: return error to CEO for Chairman escalation
+        """
+        MAX_STRIKES = 2
+        attempts = self._retry_counts.get(task_key, 0)
+
+        result = await self._inline_dispatch(agent_role, task)
+
+        if "error" not in result:
+            # Success — clear retry counter
+            self._retry_counts.pop(task_key, None)
+            return result
+
+        attempts += 1
+        self._retry_counts[task_key] = attempts
+
+        if attempts < MAX_STRIKES:
+            # Retry with hint
+            retry_task = {**task, "_retry_hint": f"Previous attempt failed. Try alternative approach."}
+            result2 = await self._inline_dispatch(agent_role, retry_task)
+            if "error" not in result2:
+                self._retry_counts.pop(task_key, None)
+                return result2
+            self._retry_counts[task_key] = MAX_STRIKES
+
+        # 2 strikes — escalate to Chairman
+        return {
+            "error":      result.get("error", "Unknown error"),
+            "escalate":   True,
+            "agent_role": agent_role,
+            "strikes":    self._retry_counts.get(task_key, MAX_STRIKES),
+            "message":    (
+                f"[Boardroom Escalation] {agent_role.upper()} failed after "
+                f"{self._retry_counts.get(task_key, MAX_STRIKES)} attempt(s). "
+                f"Chairman intervention required."
+            ),
+        }
 
     async def handle_task(self, task: dict[str, Any]) -> dict[str, Any]:
         session_id = task.get("session_id", "ceo:default:session")
@@ -167,10 +248,10 @@ class CEOAgent(PicoClaw):
         short_term = self.store.get_context(session_id)
         messages, _ = build_context(CEO_SYSTEM, summaries, short_term, budget)
 
-        tools   = get_tools_for_role(self.role)
+        tools = get_tools_for_role(self.role)
 
-        # React loop — CEO judges, delegates, waits, synthesizes
-        for _ in range(self.config.max_tool_iterations):
+        # React loop — INTERPRET → CFO/CSO → DELEGATE → REPORT
+        for iteration in range(self.config.max_tool_iterations):
             resp    = await self._router.complete_full(
                 messages=messages,
                 agent_role=self.role,
@@ -185,17 +266,41 @@ class CEOAgent(PicoClaw):
                     tool_call   = json.loads(content)
                     tool_name   = tool_call.get("tool", "")
                     tool_args   = tool_call.get("args", {})
-                    tool_result = await self._registry.execute(
-                        tool_name, tool_args, self.role, tools,
-                        audit_fn=self.store.audit,
-                    )
+
+                    # CSO check on tool execution
+                    if self._cso and tool_name in ("shell_exec", "run_python", "file_write"):
+                        cso = self._cso.review_tool_args(tool_name, tool_args,
+                                                          agent_role=self.role)
+                        if not cso.approved:
+                            tool_result = {
+                                "error": f"CSO blocked: {'; '.join(cso.findings)}",
+                                "risk":  cso.risk_level,
+                            }
+                            messages.append({"role": "assistant", "content": content})
+                            messages.append({"role": "tool",      "content": json.dumps(tool_result)})
+                            continue
+
+                    # For delegate_task, use retry wrapper
+                    if tool_name == "delegate_task":
+                        agent_target = tool_args.get("agent", "")
+                        sub_task     = tool_args.get("task", {})
+                        task_key     = f"{agent_target}:{hash(json.dumps(sub_task, sort_keys=True))}"
+                        tool_result  = await self._dispatch_with_retry(
+                            agent_target, sub_task, task_key
+                        )
+                    else:
+                        tool_result = await self._registry.execute(
+                            tool_name, tool_args, self.role, tools,
+                            audit_fn=self.store.audit,
+                        )
+
                     messages.append({"role": "assistant", "content": content})
                     messages.append({"role": "tool",      "content": json.dumps(tool_result)})
                     continue
                 except json.JSONDecodeError:
-                    pass  # not valid JSON → treat as final answer
+                    pass  # not valid JSON — treat as final answer
 
-            # Final answer — persist and summarize if needed
+            # Final answer — persist and summarize
             self.store.push_turn(session_id, "assistant", content, agent_role=self.role)
             await maybe_summarize(
                 self.store, self._router, session_id, self.role,

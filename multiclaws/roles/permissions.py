@@ -9,9 +9,14 @@ ROLE_TOOLS: dict[str, list[str]] = {
     "ceo":          ["file_read", "file_write", "file_list", "shell_exec",
                      "web_fetch", "delegate_task", "run_python", "create_plan",
                      "send_message", "n8n_trigger"],
-    "researcher":   ["file_read", "file_list", "web_fetch"],
+    # CTO = Coder with full execution rights
+    "cto":          ["file_read", "file_write", "file_list", "shell_exec", "web_fetch",
+                     "run_python"],
     "coder":        ["file_read", "file_write", "file_list", "shell_exec", "web_fetch",
                      "run_python"],
+    # CKO = Researcher with read + web access
+    "cko":          ["file_read", "file_list", "web_fetch"],
+    "researcher":   ["file_read", "file_list", "web_fetch"],
     "communicator": ["file_read", "file_list", "send_message"],
 }
 

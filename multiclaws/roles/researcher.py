@@ -32,12 +32,15 @@ class ResearcherAgent(PicoClaw):
         super().run()
 
     async def handle_task(self, task: dict[str, Any]) -> dict[str, Any]:
-        query = task.get("query", task.get("message", ""))
+        query      = task.get("query", task.get("message", ""))
         session_id = task.get("session_id", "researcher:default")
+        # CFO-injected model parameters (optional)
+        task_type  = task.get("_task_type", "simple")
+        max_tokens = task.get("_max_tokens", self.config.agent_budget(self.role).max_output_tokens)
 
         messages = [
             {"role": "system", "content": RESEARCHER_SYSTEM},
-            {"role": "user", "content": query},
+            {"role": "user",   "content": query},
         ]
 
         registry = get_registry()
@@ -48,7 +51,8 @@ class ResearcherAgent(PicoClaw):
             content = await self._router.complete(
                 messages=messages,
                 agent_role=self.role,
-                task_type="simple",
+                task_type=task_type,
+                max_tokens=max_tokens,
             )
             messages.append({"role": "assistant", "content": content})
 

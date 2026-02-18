@@ -46,6 +46,9 @@ async def run_chat(config=None) -> None:
     from multiclaws.memory.context_builder import build_context
     from multiclaws.memory.summarizer import maybe_summarize
     from multiclaws.roles.ceo import CEO_SYSTEM, CreatePlanTool
+    from multiclaws.roles.cfo import CFO
+    from multiclaws.roles.cso import CSO
+    from multiclaws.roles.coo import COO
     from multiclaws.roles.permissions import get_tools_for_role
     from multiclaws.tools.builtins.delegate import DelegateTaskTool
     from multiclaws.tools.registry import get_registry
@@ -63,19 +66,47 @@ async def run_chat(config=None) -> None:
         )
         return
 
+    # Boardroom middleware
+    cfo = CFO(cfg, store)
+    cso = CSO(store)
+    coo = COO(cfg, store)
+
     # Wire CEO tools: inline blocking dispatcher + create_plan
     registry = get_registry()
 
     async def _dispatch(agent_role: str, task: dict) -> dict:
         from multiclaws.roles.coder import CoderAgent
+        from multiclaws.roles.communicator import CommunicatorAgent
         from multiclaws.roles.researcher import ResearcherAgent
-        agent_map = {"researcher": ResearcherAgent, "coder": CoderAgent}
+
+        agent_map = {
+            "cto":          CoderAgent,
+            "coder":        CoderAgent,
+            "cko":          ResearcherAgent,
+            "researcher":   ResearcherAgent,
+            "communicator": CommunicatorAgent,
+        }
         cls = agent_map.get(agent_role)
         if cls is None:
             return {"error": f"Unknown expert: '{agent_role}'. Available: {list(agent_map)}"}
+
+        task_text = json.dumps(task)
+
+        # CFO: model allocation
+        cfo_dec = cfo.allocate(task_text, agent_role)
+        if not cfo_dec.approved:
+            return {"error": f"CFO veto: {cfo_dec.reason}"}
+
+        # CSO: security review
+        cso_dec = cso.review(task_text, agent_role=agent_role)
+        if not cso_dec.approved:
+            return {"error": f"CSO veto: {'; '.join(cso_dec.findings)}",
+                    "risk": cso_dec.risk_level}
+
         expert = cls(config=cfg)
-        expert._store = store
+        expert._store  = store
         expert._router = LLMRouter(cfg, store)
+        task = {**task, "_task_type": cfo_dec.task_type, "_max_tokens": cfo_dec.max_tokens}
         return await expert.handle_task(task)
 
     delegate_tool = registry.get("delegate_task")
@@ -88,7 +119,7 @@ async def run_chat(config=None) -> None:
     tools  = get_tools_for_role("ceo")
     budget = cfg.agent_budget("ceo")
 
-    print_banner("v3.3", router.available_providers())
+    print_banner("v3.4 Boardroom", router.available_providers())
 
     while True:
         try:

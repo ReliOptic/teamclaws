@@ -35,11 +35,14 @@ class CoderAgent(PicoClaw):
 
     async def handle_task(self, task: dict[str, Any]) -> dict[str, Any]:
         instruction = task.get("instruction", task.get("message", ""))
-        session_id = task.get("session_id", "coder:default")
+        session_id  = task.get("session_id", "coder:default")
+        # CFO-injected model parameters (optional)
+        task_type   = task.get("_task_type", "complex")
+        max_tokens  = task.get("_max_tokens", self.config.agent_budget(self.role).max_output_tokens)
 
         messages = [
             {"role": "system", "content": CODER_SYSTEM},
-            {"role": "user", "content": instruction},
+            {"role": "user",   "content": instruction},
         ]
 
         registry = get_registry()
@@ -50,7 +53,8 @@ class CoderAgent(PicoClaw):
             content = await self._router.complete(
                 messages=messages,
                 agent_role=self.role,
-                task_type="complex",
+                task_type=task_type,
+                max_tokens=max_tokens,
             )
             messages.append({"role": "assistant", "content": content})
 
