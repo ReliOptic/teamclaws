@@ -60,6 +60,13 @@ class BudgetConfig:
 
 
 @dataclass
+class AgentBudgetConfig:
+    max_input_tokens: int = 4096
+    max_output_tokens: int = 1024
+    context_turns: int = 10
+
+
+@dataclass
 class PicoConfig:
     # Paths
     workspace: Path = WORKSPACE
@@ -76,6 +83,14 @@ class PicoConfig:
     watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
+
+    # Per-role token budgets
+    agent_budgets: dict[str, AgentBudgetConfig] = field(default_factory=lambda: {
+        "ceo":          AgentBudgetConfig(4096, 1024, 10),
+        "researcher":   AgentBudgetConfig(3000, 1500, 6),
+        "coder":        AgentBudgetConfig(3000, 2048, 4),
+        "communicator": AgentBudgetConfig(2000, 512,  4),
+    })
 
     # Providers
     providers: dict[str, LLMProviderConfig] = field(default_factory=dict)
@@ -122,6 +137,10 @@ class PicoConfig:
                 for k, v in val.items():
                     if hasattr(self.budget, k):
                         setattr(self.budget, k, v)
+            elif key == "agent_budgets" and isinstance(val, dict):
+                for role, bd in val.items():
+                    if isinstance(bd, dict):
+                        self.agent_budgets[role] = AgentBudgetConfig(**bd)
             elif key == "providers" and isinstance(val, dict):
                 for pname, pdata in val.items():
                     self.providers[pname] = LLMProviderConfig(**pdata)
@@ -153,6 +172,9 @@ class PicoConfig:
 
     def provider(self, name: str) -> LLMProviderConfig:
         return self.providers.get(name, LLMProviderConfig())
+
+    def agent_budget(self, role: str) -> AgentBudgetConfig:
+        return self.agent_budgets.get(role, AgentBudgetConfig())
 
 
 # Module-level singleton — loaded once on import

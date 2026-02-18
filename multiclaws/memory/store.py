@@ -222,6 +222,60 @@ class MemoryStore:
                 (agent_role, tool_name, json.dumps(arguments), result, detail),
             )
 
+    # ── Task retry ─────────────────────────────────────────────────────────
+    def fail_with_retry(self, task_id: str, error: str) -> bool:
+        """Mark task as failed. If retries remain, reset to 'pending'. Returns True if retrying."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT retry_count, max_retries FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if not row:
+                return False
+            retry_count = (row["retry_count"] or 0) + 1
+            if retry_count <= (row["max_retries"] or 2):
+                conn.execute(
+                    "UPDATE tasks SET status='pending', retry_count=?, error_msg=?, "
+                    "updated_at=datetime('now') WHERE id=?",
+                    (retry_count, error, task_id),
+                )
+                return True
+            conn.execute(
+                "UPDATE tasks SET status='failed', retry_count=?, error_msg=?, "
+                "updated_at=datetime('now') WHERE id=?",
+                (retry_count, error, task_id),
+            )
+            return False
+
+    # ── Task dependencies ──────────────────────────────────────────────────
+    def add_task_dependency(self, task_id: str, depends_on: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO task_deps (task_id, depends_on) VALUES (?, ?)",
+                (task_id, depends_on),
+            )
+
+    def claim_ready_task(self, agent_role: str) -> dict | None:
+        """Claim next pending task whose dependencies are all 'done'."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE status='pending' AND assigned_to=? "
+                "AND NOT EXISTS ("
+                "  SELECT 1 FROM task_deps td "
+                "  JOIN tasks dep ON td.depends_on = dep.id "
+                "  WHERE td.task_id = tasks.id AND dep.status != 'done'"
+                ") ORDER BY created_at LIMIT 1",
+                (agent_role,),
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "UPDATE tasks SET status='running', updated_at=datetime('now') WHERE id=?",
+                (row["id"],),
+            )
+            task = dict(row)
+        task["input_data"] = json.loads(task["input_data"] or "{}")
+        return task
+
     # ── Session binding ────────────────────────────────────────────────────
     @staticmethod
     def make_session_id(platform: str, user_id: str, context_hash: str = "") -> str:

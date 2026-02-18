@@ -1,78 +1,94 @@
-"""Tests for the sandbox enforcement system."""
-
-import os
-import tempfile
-
+"""Tests for multiclaws.tools.sandbox — safe_path + run_subprocess."""
 import pytest
+from pathlib import Path
+from unittest.mock import patch
 
-from teamclaws.tools.sandbox import init_sandbox, safe_path, validate_file_size
-
-
-@pytest.fixture(autouse=True)
-def setup_sandbox(tmp_path):
-    """Initialize sandbox with a temp directory for each test."""
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    init_sandbox(str(workspace))
-    yield workspace
+import sys
+import os
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
-class TestSafePath:
-    """Tests for safe_path() directory traversal prevention."""
+@pytest.fixture
+def workspace(tmp_path):
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    return ws
 
-    def test_valid_path(self, setup_sandbox):
-        """Normal relative path resolves within workspace."""
-        result = safe_path("test.txt")
-        assert result.startswith(str(setup_sandbox))
-        assert result.endswith("test.txt")
 
-    def test_valid_subdirectory(self, setup_sandbox):
-        """Subdirectory path resolves within workspace."""
-        result = safe_path("subdir/test.txt")
-        assert result.startswith(str(setup_sandbox))
+def test_safe_path_within_workspace(workspace):
+    from multiclaws.tools.sandbox import safe_path, SecurityError
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        result = safe_path("subdir/file.txt")
+        assert str(result).startswith(str(workspace))
 
-    def test_traversal_blocked(self, setup_sandbox):
-        """Directory traversal with .. is blocked."""
-        with pytest.raises(PermissionError, match="escapes workspace"):
+
+def test_safe_path_dot_resolves_to_workspace(workspace):
+    from multiclaws.tools.sandbox import safe_path, SecurityError
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        result = safe_path(".")
+        assert result.resolve() == workspace.resolve()
+
+
+def test_safe_path_escape_double_dot_raises(workspace):
+    from multiclaws.tools.sandbox import safe_path, SecurityError
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        with pytest.raises(SecurityError):
             safe_path("../../etc/passwd")
 
-    def test_traversal_double_blocked(self, setup_sandbox):
-        """Multiple levels of traversal are blocked."""
-        with pytest.raises(PermissionError, match="escapes workspace"):
+
+def test_safe_path_escape_triple_dot_raises(workspace):
+    from multiclaws.tools.sandbox import safe_path, SecurityError
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        with pytest.raises(SecurityError):
             safe_path("../../../etc/shadow")
 
-    def test_absolute_path_outside(self, setup_sandbox):
-        """Absolute path outside workspace is blocked."""
-        with pytest.raises(PermissionError, match="escapes workspace"):
+
+def test_safe_path_absolute_outside_raises(workspace):
+    from multiclaws.tools.sandbox import safe_path, SecurityError
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        with pytest.raises(SecurityError):
             safe_path("/etc/passwd")
 
-    def test_dot_path(self, setup_sandbox):
-        """Current directory path resolves to workspace."""
-        result = safe_path(".")
-        assert result == str(setup_sandbox)
 
-    def test_empty_path(self, setup_sandbox):
-        """Empty path resolves to workspace root."""
-        result = safe_path("")
-        assert result == str(setup_sandbox)
+@pytest.mark.asyncio
+async def test_run_subprocess_success(workspace):
+    from multiclaws.tools.sandbox import run_subprocess
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        result = await run_subprocess(
+            [sys.executable, "-c", "print('hello teamclaws')"], timeout=10
+        )
+    assert result["returncode"] == 0
+    assert "hello teamclaws" in result["stdout"]
+    assert result["timed_out"] is False
 
 
-class TestValidateFileSize:
-    """Tests for file size validation."""
+@pytest.mark.asyncio
+async def test_run_subprocess_stderr(workspace):
+    from multiclaws.tools.sandbox import run_subprocess
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        result = await run_subprocess(
+            [sys.executable, "-c", "import sys; sys.stderr.write('err')"], timeout=10
+        )
+    assert "err" in result["stderr"]
 
-    def test_small_file_ok(self, setup_sandbox):
-        """File under limit passes validation."""
-        filepath = setup_sandbox / "small.txt"
-        filepath.write_text("hello")
-        validate_file_size(str(filepath), max_bytes=1024)
 
-    def test_large_file_rejected(self, setup_sandbox):
-        """File over limit raises ValueError."""
-        filepath = setup_sandbox / "large.txt"
-        filepath.write_bytes(b"x" * 100_000)
-        with pytest.raises(ValueError, match="too large"):
-            validate_file_size(str(filepath), max_bytes=50_000)
+@pytest.mark.asyncio
+async def test_run_subprocess_timeout(workspace):
+    from multiclaws.tools.sandbox import run_subprocess
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        result = await run_subprocess(
+            [sys.executable, "-c", "import time; time.sleep(30)"], timeout=1
+        )
+    assert result["timed_out"] is True
+    assert result["returncode"] == -1
 
-    def test_nonexistent_file_ok(self, setup_sandbox):
-        """Non-existent file passes (nothing to check)."""
-        validate_file_size(str(setup_sandbox / "nope.txt"))
+
+@pytest.mark.asyncio
+async def test_run_subprocess_nonzero_exit(workspace):
+    from multiclaws.tools.sandbox import run_subprocess
+    with patch("multiclaws.tools.sandbox.WORKSPACE", workspace):
+        result = await run_subprocess(
+            [sys.executable, "-c", "raise SystemExit(1)"], timeout=5
+        )
+    assert result["returncode"] == 1
+    assert result["timed_out"] is False

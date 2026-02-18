@@ -90,6 +90,30 @@ max_tool_iterations: 5
 sandbox_timeout_seconds: 5
 
 # ─────────────────────────────────────────
+# AGENT TOKEN BUDGETS  (Phase E)
+# max_input_tokens: context window limit per call
+# max_output_tokens: generation limit
+# context_turns: how many recent turns to include
+# ─────────────────────────────────────────
+agent_budgets:
+  ceo:
+    max_input_tokens: 4096
+    max_output_tokens: 1024
+    context_turns: 10
+  researcher:
+    max_input_tokens: 3000
+    max_output_tokens: 1500
+    context_turns: 6
+  coder:
+    max_input_tokens: 3000
+    max_output_tokens: 2048
+    context_turns: 4
+  communicator:
+    max_input_tokens: 2000
+    max_output_tokens: 512
+    context_turns: 4
+
+# ─────────────────────────────────────────
 # TELEGRAM (optional secondary interface)
 # Set TELEGRAM_BOT_TOKEN in .env
 # ─────────────────────────────────────────

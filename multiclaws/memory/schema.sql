@@ -53,10 +53,22 @@ CREATE TABLE IF NOT EXISTS tasks (
                         CHECK(status IN ('pending','assigned','running','done','failed')),
     input_data  TEXT,               -- JSON
     output_data TEXT,               -- JSON
+    retry_count INTEGER DEFAULT 0,
+    max_retries INTEGER DEFAULT 2,
+    error_msg   TEXT,
     created_at  TEXT    DEFAULT (datetime('now')),
     updated_at  TEXT    DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, assigned_to);
+
+-- ─────────────────────────────────────────
+-- TASK DEPENDENCIES  (Phase D)
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS task_deps (
+    task_id     TEXT NOT NULL,
+    depends_on  TEXT NOT NULL,
+    PRIMARY KEY (task_id, depends_on)
+);
 
 -- ─────────────────────────────────────────
 -- LLM COST LOG  §4-3

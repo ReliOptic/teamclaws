@@ -92,7 +92,10 @@ def _load_builtins(reg: ToolRegistry) -> None:
     from multiclaws.tools.builtins.file_ops import FileReadTool, FileWriteTool, FileListTool
     from multiclaws.tools.builtins.shell_exec import ShellExecTool
     from multiclaws.tools.builtins.web_fetch import WebFetchTool
+    from multiclaws.tools.builtins.delegate import DelegateTaskTool
+    from multiclaws.tools.builtins.run_python import RunPythonTool
 
     for tool in [FileReadTool(), FileWriteTool(), FileListTool(),
-                 ShellExecTool(), WebFetchTool()]:
+                 ShellExecTool(), WebFetchTool(),
+                 DelegateTaskTool(), RunPythonTool()]:
         reg.register(tool)

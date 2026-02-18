@@ -160,12 +160,17 @@ class LLMRouter:
                         cost_usd=resp.cost_usd,
                         latency_ms=resp.latency_ms,
                     )
-                    # Budget alert
+                    # Budget check
                     daily = self.store.get_daily_cost()
                     limit = self.config.budget.daily_usd
-                    if daily > limit * self.config.budget.alert_threshold_percent / 100:
+                    pct = daily / limit * 100 if limit else 0
+                    if daily >= limit:
+                        raise ProviderExhaustedError(
+                            f"Daily budget exhausted: ${daily:.4f} / ${limit:.2f}"
+                        )
+                    if pct >= self.config.budget.alert_threshold_percent:
                         log.warning("Daily budget %.1f%% used ($%.4f / $%.2f)",
-                                    daily / limit * 100, daily, limit)
+                                    pct, daily, limit)
                 return resp
 
             except Exception as exc:

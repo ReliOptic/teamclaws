@@ -7,9 +7,11 @@ from __future__ import annotations
 # Capability → allowed roles
 ROLE_TOOLS: dict[str, list[str]] = {
     "ceo":          ["file_read", "file_write", "file_list", "shell_exec",
-                     "web_fetch", "delegate_task", "send_message", "n8n_trigger"],
+                     "web_fetch", "delegate_task", "run_python", "create_plan",
+                     "send_message", "n8n_trigger"],
     "researcher":   ["file_read", "file_list", "web_fetch"],
-    "coder":        ["file_read", "file_write", "file_list", "shell_exec", "web_fetch"],
+    "coder":        ["file_read", "file_write", "file_list", "shell_exec", "web_fetch",
+                     "run_python"],
     "communicator": ["file_read", "file_list", "send_message"],
 }
 

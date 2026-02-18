@@ -1,6 +1,7 @@
 """Researcher PicoClaw: web search + summarize. (§6-2)"""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from multiclaws.core.picoclaw import PicoClaw
@@ -10,7 +11,12 @@ from multiclaws.tools.registry import get_registry
 
 RESEARCHER_SYSTEM = """You are a Researcher agent. Your job is to gather, verify, and summarize information.
 Use web_fetch to retrieve URLs. Use file_read to read local files.
-Return structured, factual summaries. Cite sources. Be concise."""
+Return structured, factual summaries. Cite sources. Be concise.
+
+To use a tool, respond with JSON only (no other text):
+{"tool": "web_fetch", "args": {"url": "https://example.com"}}
+
+When done, respond with plain text (your final answer)."""
 
 
 class ResearcherAgent(PicoClaw):
@@ -36,14 +42,31 @@ class ResearcherAgent(PicoClaw):
 
         registry = get_registry()
         tools = get_tools_for_role(self.role)
+        content = ""
 
-        for _ in range(3):
+        for _ in range(self.config.max_tool_iterations):
             content = await self._router.complete(
                 messages=messages,
                 agent_role=self.role,
                 task_type="simple",
             )
             messages.append({"role": "assistant", "content": content})
-            break  # extend with tool loop if needed
+
+            if content.strip().startswith("{") and '"tool"' in content:
+                try:
+                    tool_call = json.loads(content)
+                    tool_name = tool_call.get("tool", "")
+                    tool_args = tool_call.get("args", {})
+                    tool_result = await registry.execute(
+                        tool_name, tool_args, self.role, tools,
+                        audit_fn=self.store.audit if self.store else None,
+                    )
+                    messages.append({"role": "tool", "content": json.dumps(tool_result)})
+                    continue
+                except json.JSONDecodeError:
+                    pass
+
+            # Final answer (plain text)
+            break
 
         return {"result": content, "query": query}
