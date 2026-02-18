@@ -1,4 +1,7 @@
-# TeamClaws v3.2 — PicoClaw-Native Edition
+# TeamClaws v3.4 — Boardroom Edition
+
+> **Chairman-CEO-Expert** 3-tier architecture.
+> The CEO judges and delegates. Experts execute. CFO/CSO/COO govern silently.
 
 Multi-agent AI system designed for **GCP Free Tier** (e2-micro: 1 vCPU, 1GB RAM).
 
@@ -8,7 +11,7 @@ Multi-agent AI system designed for **GCP Free Tier** (e2-micro: 1 vCPU, 1GB RAM)
 curl -fsSL https://raw.githubusercontent.com/ReliOptic/teamclaws/main/setup.sh | bash
 ```
 
-Then add your API key and chat:
+Add your API key and start:
 
 ```bash
 nano ~/teamclaws/.env   # add GROQ_API_KEY=gsk_...
@@ -18,13 +21,90 @@ teamclaws chat
 ## CLI Commands
 
 ```bash
-teamclaws chat                          # Interactive chat
-teamclaws preset code-reviewer \        # Run a specialist
+teamclaws chat                          # Interactive chat (Chairman mode)
+teamclaws preset code-reviewer \        # Run a specialist preset
   --input 'review this: ...'
 teamclaws preset --list                 # Show all 59 agents
 teamclaws status                        # Agent + cost status
 teamclaws cost                          # LLM spending today/week
 teamclaws config                        # Show configuration
+```
+
+## Boardroom Architecture (v3.4)
+
+```
+Chairman (User)
+    │
+    ▼
+CEO ── Chief of Staff
+    │  • Interprets intent
+    │  • Judges: direct answer vs. delegate
+    │  • 2-Strike Rule: fail → retry → Chairman escalation
+    │
+    ├── CFO (middleware, no LLM)
+    │     • Auto-selects model tier: fast / simple / complex
+    │     • Budget projection + downgrade before veto
+    │
+    ├── CSO (middleware, no LLM)
+    │     • Blocks 12 dangerous shell patterns
+    │     • Detects & redacts PII (credit cards, SSN, API keys)
+    │     • System path blocklist + audit log
+    │
+    ├── COO (middleware, OS events)
+    │     • File system event binding (watchdog lib)
+    │     • "File modified → wake CEO" — no polling loop
+    │
+    ├── CTO → CoderAgent (Full LLM Agent)
+    │     • Code writing, file I/O, shell_exec, run_python
+    │     • React loop (JSON tool detection)
+    │
+    └── CKO → ResearcherAgent (Full LLM Agent)
+          • Web fetch, file read, knowledge synthesis
+          • React loop (JSON tool detection)
+
+Shared: SQLite WAL (memory + tasks + costs + audit)
+        LLM Router (5 providers, scoring-based fallback)
+Presets: 59 YAML-defined specialist agents (zero extra code)
+```
+
+## What Changed from v3.2 → v3.4
+
+| | v3.2 | v3.4 |
+|---|---|---|
+| Architecture | Single-tier execution | 3-tier Chairman-CEO-Expert |
+| CEO role | "Execute + orchestrate" | "Judge + delegate only" |
+| Model selection | Hardcoded per agent | CFO dynamic (fast/simple/complex) |
+| Security | Sandbox only | CSO veto + PII redaction + audit |
+| Scheduling | Python sleep loop | OS events via COO (watchdog) |
+| Failure handling | Max iterations | 2-Strike Rule + Chairman escalation |
+| Token management | Fixed budget | context_builder priority-based trimming |
+
+## C-Suite Design Philosophy
+
+- **CEO / CTO / CKO** → Full Agents (LLM reasoning required)
+- **CFO / CSO / COO** → Lightweight Middleware (Python rules, zero LLM cost)
+
+CFO pays for itself: routine summarization uses `fast` tier (1/10 the cost of `complex`).
+CSO has veto power: even if CEO requests it, dangerous commands are blocked.
+COO binds OS events: system wakes on demand, not on a timer.
+
+## LLM Providers (priority order)
+
+| Provider | Priority | Free Tier |
+|---|---|---|
+| Groq | 0.9 (highest) | Yes — groq.com |
+| Google Gemini | 0.8 | Yes — 15 req/min |
+| Anthropic Claude | 0.7 | No |
+| OpenAI | 0.6 | No |
+| Mistral | 0.5 | Limited |
+
+Set any key to enable:
+```bash
+GROQ_API_KEY=gsk_...
+GOOGLE_API_KEY=...
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-...
+MISTRAL_API_KEY=...
 ```
 
 ## AI Dream Team (59 Specialists)
@@ -42,34 +122,12 @@ teamclaws config                        # Show configuration
 | Communication | technical-writer, api-documenter, changelog-writer, support-responder, team-communicator, presentation-builder |
 | Research | technology-researcher, trend-analyzer, library-evaluator, best-practice-finder, solution-architect |
 
-## Cost Optimization
-
-Agents are **on-demand** — they only run when called.  
-Recommended free-tier provider: **Groq** (llama-3.1-8b-instant)
-
-```
-teamclaws cost   # Today: $0.000234 / $0.50 limit
-```
-
-## Architecture
-
-```
-Watchdog (PID 1) — process supervisor, no LLM, pure SRE
-  └─ CEO PicoClaw ─── handles user requests, delegates
-       ├─ Researcher ─ on-demand: web research
-       ├─ Coder ────── on-demand: code + files
-       └─ Communicator on-demand: messages
-  
-Shared: SQLite WAL (memory + tasks + costs) + LLM Router (5 providers)
-Presets: 59 YAML-defined specialist agents (zero extra code)
-```
-
 ## Requirements
 
-- Ubuntu 22.04+
+- Ubuntu 22.04+ (GCP e2-micro free tier compatible)
 - Python 3.10+
-- 1GB RAM (GCP e2-micro free tier)
-- At least one LLM API key
+- 1GB RAM
+- At least one LLM API key (Groq recommended — free)
 
 ## License
 
