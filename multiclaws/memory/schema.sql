@@ -1,12 +1,12 @@
--- TeamClaws v3.2 SQLite WAL-mode schema
--- All tables from §5 (Memory) + §6 (Tasks)
+-- TeamClaws v3.5 SQLite WAL-mode schema
+-- 3계층 메모리 + FTS5 하이브리드 검색 지원
 
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous  = NORMAL;
 PRAGMA foreign_keys = ON;
 
 -- ─────────────────────────────────────────
--- CONVERSATION TURNS
+-- CONVERSATION TURNS  (L1 Active Thread)
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS turns (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,7 +21,34 @@ CREATE TABLE IF NOT EXISTS turns (
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, id);
 
 -- ─────────────────────────────────────────
--- SUMMARIES
+-- FTS5 가상 테이블: turns 전문 검색  (v3.5)
+-- ─────────────────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS turns_fts USING fts5(
+    content,
+    session_id UNINDEXED,
+    tokenize = 'porter ascii'
+);
+
+-- 트리거: turns INSERT 시 자동 색인
+CREATE TRIGGER IF NOT EXISTS turns_ai
+AFTER INSERT ON turns
+BEGIN
+    INSERT INTO turns_fts(content, session_id)
+    VALUES (new.content, new.session_id);
+END;
+
+-- ─────────────────────────────────────────
+-- FTS5 가상 테이블: L3 MEMORY.md 청크 색인  (v3.5)
+-- ─────────────────────────────────────────
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(
+    chunk_text,
+    heading    UNINDEXED,
+    chunk_id   UNINDEXED,
+    tokenize = 'porter ascii'
+);
+
+-- ─────────────────────────────────────────
+-- SUMMARIES  (Agentic Compaction 결과 캐시)
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS summaries (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +70,7 @@ CREATE TABLE IF NOT EXISTS agent_state (
 );
 
 -- ─────────────────────────────────────────
--- TASK QUEUE  §6-2
+-- TASK QUEUE
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tasks (
     id          TEXT    PRIMARY KEY,
@@ -62,7 +89,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, assigned_to);
 
 -- ─────────────────────────────────────────
--- TASK DEPENDENCIES  (Phase D)
+-- TASK DEPENDENCIES
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS task_deps (
     task_id     TEXT NOT NULL,
@@ -71,7 +98,7 @@ CREATE TABLE IF NOT EXISTS task_deps (
 );
 
 -- ─────────────────────────────────────────
--- LLM COST LOG  §4-3
+-- LLM COST LOG
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cost_log (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +114,7 @@ CREATE TABLE IF NOT EXISTS cost_log (
 CREATE INDEX IF NOT EXISTS idx_cost_ts ON cost_log(ts);
 
 -- ─────────────────────────────────────────
--- SECURITY AUDIT LOG  §7-3
+-- SECURITY AUDIT LOG
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_log (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,

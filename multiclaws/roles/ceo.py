@@ -21,6 +21,7 @@ from multiclaws.llm.router import LLMRouter
 from multiclaws.memory.context_builder import build_context
 from multiclaws.memory.summarizer import maybe_summarize
 from multiclaws.roles.cfo import CFO
+from multiclaws.roles.coo import COO
 from multiclaws.roles.cso import CSO
 from multiclaws.roles.permissions import get_tools_for_role
 from multiclaws.tools.builtins.delegate import DelegateTaskTool
@@ -118,15 +119,46 @@ class CEOAgent(PicoClaw):
         self._registry = None
         self._cfo: CFO | None = None
         self._cso: CSO | None = None
+        self._coo: COO | None = None
 
     def run(self) -> None:
         self._router   = LLMRouter(self.config)
         self._registry = get_registry()
         self._cfo      = CFO(self.config, self.store)
         self._cso      = CSO(self.store)
+        self._coo      = COO(self.config, self.store)
         self._inject_delegate_dispatcher()
         self._registry.register(CreatePlanTool(store=self.store))
+        self._setup_memory_watch()
         super().run()
+
+    def _setup_memory_watch(self) -> None:
+        """COO: MEMORY.md 변경 감지 → FTS5 자동 재색인 (v3.5)."""
+        if not self._coo:
+            return
+        try:
+            from multiclaws.memory.chunker import reindex_memory_file
+            from multiclaws.utils.logger import get_logger
+            _log = get_logger("ceo.memory_watch")
+
+            memory_file = self.config.workspace / "MEMORY.md"
+            memory_dir = str(memory_file.parent)
+
+            def _on_memory_change(event_type: str, file_path: str) -> None:
+                if event_type in ("modified", "created"):
+                    count = reindex_memory_file(self.store, file_path)
+                    if count > 0:
+                        _log.info("MEMORY.md reindexed: %d new chunks", count)
+
+            self._coo.watch(
+                path=memory_dir,
+                callback=_on_memory_change,
+                pattern="MEMORY.md",
+                description="L3 durable memory auto-reindex",
+            )
+        except Exception as e:
+            from multiclaws.utils.logger import get_logger
+            get_logger("ceo").warning("Memory watch setup failed (non-fatal): %s", e)
 
     def _inject_delegate_dispatcher(self) -> None:
         """Wire inline blocking dispatcher (보고 체계 안전장치)."""
@@ -242,11 +274,43 @@ class CEOAgent(PicoClaw):
         # Persist Chairman's message
         self.store.push_turn(session_id, "user", user_msg, agent_role=self.role)
 
-        # Build token-budgeted context
+        # ── v3.5: 3계층 메모리 로드 ──────────────────────────────────────
         budget     = self.config.agent_budget(self.role)
         summaries  = self.store.load_latest_summaries(session_id)
         short_term = self.store.get_context(session_id)
-        messages, _ = build_context(CEO_SYSTEM, summaries, short_term, budget)
+
+        # L3 Durable Memory (MEMORY.md)
+        durable_memory = ""
+        try:
+            from multiclaws.memory.durable_memory import load_durable_memory
+            durable_memory = load_durable_memory(self.config)
+        except Exception:
+            pass
+
+        # L2 Daily Log (오늘+어제)
+        daily_log = ""
+        try:
+            from multiclaws.memory.daily_log import load_recent_daily_logs
+            daily_log = load_recent_daily_logs(self.config, n_days=2)
+        except Exception:
+            pass
+
+        # Hybrid retrieval (FTS5)
+        retrieved_chunks: list[str] = []
+        try:
+            from multiclaws.memory.retriever import HybridRetriever
+            retriever = HybridRetriever(self.store)
+            result = retriever.search_all_context(user_msg, session_id)
+            retrieved_chunks = result.get("memory_chunks", [])
+        except Exception:
+            pass
+
+        messages, _ = build_context(
+            CEO_SYSTEM, summaries, short_term, budget,
+            daily_log=daily_log,
+            durable_memory=durable_memory,
+            retrieved_chunks=retrieved_chunks,
+        )
 
         tools = get_tools_for_role(self.role)
 
@@ -300,11 +364,12 @@ class CEOAgent(PicoClaw):
                 except json.JSONDecodeError:
                     pass  # not valid JSON — treat as final answer
 
-            # Final answer — persist and summarize
+            # Final answer — persist and summarize (v3.5: config 전달로 L2/L3 기록)
             self.store.push_turn(session_id, "assistant", content, agent_role=self.role)
             await maybe_summarize(
                 self.store, self._router, session_id, self.role,
                 every_n=self.config.memory.summarize_every_n_turns,
+                config=self.config,
             )
             return {"result": content, "session_id": session_id}
 

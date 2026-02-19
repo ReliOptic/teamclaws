@@ -50,6 +50,9 @@ class MemoryConfig:
     short_term_maxlen: int = 20
     summarize_every_n_turns: int = 15
     summary_compression_ratio: float = 0.33
+    # v3.5: L2/L3 파일 기반 메모리 경로
+    memory_dir: str = str(WORKSPACE / "memory")   # L2 daily logs
+    durable_memory_file: str = str(WORKSPACE / "MEMORY.md")  # L3
 
 
 @dataclass
@@ -84,12 +87,12 @@ class PicoConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
 
-    # Per-role token budgets
+    # Per-role token budgets (v3.5: 32k+ for OpenClaw-level context density)
     agent_budgets: dict[str, AgentBudgetConfig] = field(default_factory=lambda: {
-        "ceo":          AgentBudgetConfig(4096, 1024, 10),
-        "researcher":   AgentBudgetConfig(3000, 1500, 6),
-        "coder":        AgentBudgetConfig(3000, 2048, 4),
-        "communicator": AgentBudgetConfig(2000, 512,  4),
+        "ceo":          AgentBudgetConfig(32_768, 2048, 30),
+        "researcher":   AgentBudgetConfig(24_576, 3000, 20),
+        "coder":        AgentBudgetConfig(32_768, 4096, 20),
+        "communicator": AgentBudgetConfig(16_384, 1024, 10),
     })
 
     # Providers
@@ -149,13 +152,14 @@ class PicoConfig:
 
     def _apply_env(self) -> None:
         env_map = {
-            "OPENAI_API_KEY": ("providers", "openai", "api_key"),
-            "ANTHROPIC_API_KEY": ("providers", "anthropic", "api_key"),
-            "GOOGLE_API_KEY": ("providers", "google", "api_key"),
-            "GROQ_API_KEY": ("providers", "groq", "api_key"),
-            "MISTRAL_API_KEY": ("providers", "mistral", "api_key"),
-            "TELEGRAM_BOT_TOKEN": ("telegram_token",),
-            "N8N_WEBHOOK_BASE": ("n8n_webhook_base",),
+            "OPENAI_API_KEY":      ("providers", "openai",      "api_key"),
+            "ANTHROPIC_API_KEY":   ("providers", "anthropic",   "api_key"),
+            "GOOGLE_API_KEY":      ("providers", "google",      "api_key"),
+            "GROQ_API_KEY":        ("providers", "groq",        "api_key"),
+            "MISTRAL_API_KEY":     ("providers", "mistral",     "api_key"),
+            "OPENROUTER_API_KEY":  ("providers", "openrouter",  "api_key"),  # v3.5
+            "TELEGRAM_BOT_TOKEN":  ("telegram_token",),
+            "N8N_WEBHOOK_BASE":    ("n8n_webhook_base",),
         }
         for env_key, path in env_map.items():
             val = os.environ.get(env_key, "")

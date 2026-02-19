@@ -1,4 +1,4 @@
-# TeamClaws v3.2 — Default Configuration
+# TeamClaws v3.5 — Default Configuration
 # GCP Free Tier target: e2-micro (1 vCPU, 1GB RAM)
 # Override any value with environment variables (see .env.example)
 
@@ -10,7 +10,7 @@ log_max_bytes: 10485760  # 10MB
 log_backup_count: 3
 
 # ─────────────────────────────────────────
-# WATCHDOG  (§3)
+# WATCHDOG
 # ─────────────────────────────────────────
 watchdog:
   poll_interval_seconds: 5
@@ -22,15 +22,17 @@ watchdog:
   max_restarts: 3
 
 # ─────────────────────────────────────────
-# MEMORY  (§5)
+# MEMORY  (v3.5: L2/L3 파일 기반 메모리 추가)
 # ─────────────────────────────────────────
 memory:
   short_term_maxlen: 20
   summarize_every_n_turns: 15
   summary_compression_ratio: 0.33
+  # L2: workspace/memory/YYYY-MM-DD.md (일일 로그)
+  # L3: workspace/MEMORY.md (영구 메모리) — 코드에서 자동 생성
 
 # ─────────────────────────────────────────
-# COST BUDGET  (§4-3)
+# COST BUDGET
 # ─────────────────────────────────────────
 budget:
   daily_usd: 0.50         # Alert at 80% → $0.40/day
@@ -38,18 +40,33 @@ budget:
   alert_threshold_percent: 80.0
 
 # ─────────────────────────────────────────
-# LLM PROVIDERS  (§4-1)
-# API keys should be set via environment variables, not here.
-# Set enabled: true only for providers you have keys for.
+# LLM PROVIDERS
+# API keys는 환경변수로 설정 (GROQ_API_KEY, OPENROUTER_API_KEY 등)
+# enabled: false 상태여도 API 키가 있으면 _apply_env()에서 자동 활성화됨
 # ─────────────────────────────────────────
 providers:
   groq:
-    enabled: false         # Free tier available: groq.com
+    enabled: false         # Free tier: groq.com
     models: [llama-3.3-70b-versatile, llama-3.1-8b-instant, mixtral-8x7b-32768]
-    priority: 0.9          # Prefer Groq: fastest, cheapest
+    priority: 0.9          # Groq 최우선: 가장 빠르고 저렴
     cost_per_1k_input: 0.00006
     cost_per_1k_output: 0.00008
     max_requests_per_minute: 30
+    timeout_seconds: 15
+
+  openrouter:              # v3.5 신규 — Groq 폴백용 무료 모델 허브
+    enabled: false         # OPENROUTER_API_KEY 설정 시 자동 활성화
+    models:
+      - "google/gemma-3-27b-it:free"
+      - "meta-llama/llama-3.2-3b-instruct:free"
+      - "qwen/qwen-2.5-72b-instruct:free"
+      - "mistralai/mistral-7b-instruct:free"
+      - "microsoft/phi-3-mini-128k-instruct:free"
+    priority: 0.85         # Groq 바로 아래 — 무료이므로 높은 우선순위
+    cost_per_1k_input: 0.0
+    cost_per_1k_output: 0.0
+    max_requests_per_minute: 20
+    timeout_seconds: 90    # 무료 모델은 느릴 수 있음
 
   google:
     enabled: false         # Free tier: 15 req/min on gemini-1.5-flash
@@ -58,14 +75,7 @@ providers:
     cost_per_1k_input: 0.0001
     cost_per_1k_output: 0.0004
     max_requests_per_minute: 15
-
-  openai:
-    enabled: false
-    models: [gpt-4o-mini, gpt-4o]
-    priority: 0.6
-    cost_per_1k_input: 0.00015
-    cost_per_1k_output: 0.0006
-    max_requests_per_minute: 60
+    timeout_seconds: 30
 
   anthropic:
     enabled: false
@@ -74,6 +84,16 @@ providers:
     cost_per_1k_input: 0.00025
     cost_per_1k_output: 0.00125
     max_requests_per_minute: 60
+    timeout_seconds: 30
+
+  openai:
+    enabled: false
+    models: [gpt-4o-mini, gpt-4o]
+    priority: 0.6
+    cost_per_1k_input: 0.00015
+    cost_per_1k_output: 0.0006
+    max_requests_per_minute: 60
+    timeout_seconds: 30
 
   mistral:
     enabled: false
@@ -82,6 +102,7 @@ providers:
     cost_per_1k_input: 0.0002
     cost_per_1k_output: 0.0006
     max_requests_per_minute: 60
+    timeout_seconds: 30
 
 # ─────────────────────────────────────────
 # AGENT DEFAULTS
@@ -90,34 +111,34 @@ max_tool_iterations: 5
 sandbox_timeout_seconds: 5
 
 # ─────────────────────────────────────────
-# AGENT TOKEN BUDGETS  (Phase E)
-# max_input_tokens: context window limit per call
-# max_output_tokens: generation limit
-# context_turns: how many recent turns to include
+# AGENT TOKEN BUDGETS  (v3.5: OpenClaw 수준 32k+ 상향)
+# max_input_tokens: 컨텍스트 윈도우 한도 (L1+L2+L3+retrieved+summary+turns)
+# max_output_tokens: 생성 토큰 한도
+# context_turns: 단기 메모리 포함 턴 수
 # ─────────────────────────────────────────
 agent_budgets:
   ceo:
-    max_input_tokens: 4096
+    max_input_tokens: 32768   # 4096 → 32k (8x 상향)
+    max_output_tokens: 2048
+    context_turns: 30
+  researcher:
+    max_input_tokens: 24576   # 3000 → 24k (8x 상향)
+    max_output_tokens: 3000
+    context_turns: 20
+  coder:
+    max_input_tokens: 32768   # 3000 → 32k (10x 상향)
+    max_output_tokens: 4096
+    context_turns: 20
+  communicator:
+    max_input_tokens: 16384   # 2000 → 16k (8x 상향)
     max_output_tokens: 1024
     context_turns: 10
-  researcher:
-    max_input_tokens: 3000
-    max_output_tokens: 1500
-    context_turns: 6
-  coder:
-    max_input_tokens: 3000
-    max_output_tokens: 2048
-    context_turns: 4
-  communicator:
-    max_input_tokens: 2000
-    max_output_tokens: 512
-    context_turns: 4
 
 # ─────────────────────────────────────────
-# TELEGRAM (optional secondary interface)
+# TELEGRAM (optional)
 # Set TELEGRAM_BOT_TOKEN in .env
 # ─────────────────────────────────────────
-telegram_allowed_users: []  # Empty = all users allowed (set specific user IDs for security)
+telegram_allowed_users: []
 
 # ─────────────────────────────────────────
 # n8n AUTOMATION (optional)

@@ -16,17 +16,20 @@ if TYPE_CHECKING:
 
 log = get_logger("llm.router")
 
-# Task type → preferred model quality mapping
+# Task type → preferred model quality mapping  (v3.5: openrouter 추가)
 TASK_MODEL_MAP = {
     "complex":  {"openai": "gpt-4o",            "anthropic": "claude-sonnet-4-5-20250929",
                  "google": "gemini-1.5-pro",     "groq": "llama-3.3-70b-versatile",
-                 "mistral": "mistral-large-latest"},
+                 "mistral": "mistral-large-latest",
+                 "openrouter": "qwen/qwen-2.5-72b-instruct:free"},
     "simple":   {"openai": "gpt-4o-mini",        "anthropic": "claude-haiku-4-5-20251001",
                  "google": "gemini-2.0-flash",   "groq": "llama-3.1-8b-instant",
-                 "mistral": "mistral-small-latest"},
+                 "mistral": "mistral-small-latest",
+                 "openrouter": "google/gemma-3-27b-it:free"},
     "fast":     {"openai": "gpt-4o-mini",        "anthropic": "claude-haiku-4-5-20251001",
                  "google": "gemini-2.0-flash",   "groq": "llama-3.1-8b-instant",
-                 "mistral": "open-mistral-nemo"},
+                 "mistral": "open-mistral-nemo",
+                 "openrouter": "mistralai/mistral-7b-instruct:free"},
 }
 
 
@@ -48,13 +51,15 @@ class LLMRouter:
         from multiclaws.llm.providers.groq_provider import GroqProvider
         from multiclaws.llm.providers.mistral_provider import MistralProvider
         from multiclaws.llm.providers.openai_provider import OpenAIProvider
+        from multiclaws.llm.providers.openrouter_provider import OpenRouterProvider  # v3.5
 
         classes = {
-            "openai": OpenAIProvider,
-            "anthropic": ClaudeProvider,
-            "google": GeminiProvider,
-            "groq": GroqProvider,
-            "mistral": MistralProvider,
+            "openai":      OpenAIProvider,
+            "anthropic":   ClaudeProvider,
+            "google":      GeminiProvider,
+            "groq":        GroqProvider,
+            "mistral":     MistralProvider,
+            "openrouter":  OpenRouterProvider,  # v3.5
         }
         for name, cls in classes.items():
             pcfg = self.config.provider(name)
