@@ -26,7 +26,7 @@ import httpx
 from multiclaws.llm.provider import BaseProvider, LLMResponse
 
 _API_URL = "https://openrouter.ai/api/v1/chat/completions"
-_SITE_URL = "https://github.com/ReliOptic/teamclaws"
+_SITE_URL = "https://github.com/YOUR_GITHUB/teamclaws"  # setup.sh 설치 시 자동 교체됨
 _APP_NAME = "TeamClaws"
 
 # 무료 모델 — cost 0
