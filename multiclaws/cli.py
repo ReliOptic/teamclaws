@@ -104,6 +104,15 @@ def cmd_watchdog(args) -> None:
     run_watchdog()
 
 
+def cmd_telegram(args) -> None:
+    """v3.6: Start Telegram bot with full session continuity."""
+    from multiclaws.config import get_config
+    from multiclaws.main import run_telegram_bot
+    import asyncio
+    cfg = get_config()
+    asyncio.run(run_telegram_bot(cfg))
+
+
 def cmd_cost(args) -> None:
     from multiclaws.config import get_config
     from multiclaws.memory.store import MemoryStore
@@ -116,7 +125,7 @@ def cmd_cost(args) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="teamclaws",
-        description="TeamClaws v3.2 — PicoClaw-Native Multi-Agent System",
+        description="TeamClaws v3.6 — Team Organism Memory Architecture",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -135,6 +144,9 @@ def main() -> None:
     # watchdog (used by systemd service)
     sub.add_parser("watchdog", help="Start Watchdog + enabled agents (systemd / daemon mode)")
 
+    # telegram (v3.6)
+    sub.add_parser("telegram", help="Start Telegram bot (set TELEGRAM_BOT_TOKEN in .env)")
+
     # preset
     p_preset = sub.add_parser("preset", help="Run a Dream Team preset agent")
     p_preset.add_argument("name", nargs="?", help="Preset agent name")
@@ -150,6 +162,7 @@ def main() -> None:
         "config":   cmd_config,
         "preset":   cmd_preset,
         "watchdog": cmd_watchdog,
+        "telegram": cmd_telegram,
     }
 
     try:

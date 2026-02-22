@@ -1,5 +1,5 @@
 """
-CEO PicoClaw: Chairman-CEO-Boardroom 3계층 구조의 중재자. (§6-2 v3.4)
+CEO PicoClaw: Chairman-CEO-Boardroom 3계층 구조의 중재자. (v3.6)
 
 이사회 프로토콜 (Boardroom Protocol):
   1. INTERPRET  — Chairman의 의도 파악 (한 번만 되물음)
@@ -20,6 +20,7 @@ from multiclaws.core.picoclaw import PicoClaw
 from multiclaws.llm.router import LLMRouter
 from multiclaws.memory.context_builder import build_context
 from multiclaws.memory.summarizer import maybe_summarize
+from multiclaws.memory.task_context import get_task_context
 from multiclaws.roles.cfo import CFO
 from multiclaws.roles.coo import COO
 from multiclaws.roles.cso import CSO
@@ -274,10 +275,10 @@ class CEOAgent(PicoClaw):
         # Persist Chairman's message
         self.store.push_turn(session_id, "user", user_msg, agent_role=self.role)
 
-        # ── v3.5: 3계층 메모리 로드 ──────────────────────────────────────
+        # ── v3.6: 4계층 메모리 로드 ──────────────────────────────────────
         budget     = self.config.agent_budget(self.role)
         summaries  = self.store.load_latest_summaries(session_id)
-        short_term = self.store.get_context(session_id)
+        short_term = self.store.get_context(session_id)  # v3.6: 자동 복구 포함
 
         # L3 Durable Memory (MEMORY.md)
         durable_memory = ""
@@ -305,8 +306,31 @@ class CEOAgent(PicoClaw):
         except Exception:
             pass
 
+        # v3.6: 팀 활동 컨텍스트 (팀 유기체 성장 메모리)
+        team_context = ""
+        try:
+            team_context = self.store.get_team_context(session_id)
+        except Exception:
+            pass
+
+        # v3.6: 태스크 즉시 기록 컨텍스트 (INSTRUNCTION.md 방식)
+        task_ctx_block = ""
+        try:
+            task_ctx = get_task_context(session_id, self.config.workspace)
+            task_ctx.append(f"Chairman 요청: {user_msg[:120]}", agent="chairman")
+            task_ctx_block = task_ctx.as_system_block()
+        except Exception:
+            pass
+
+        # 팀 컨텍스트 + 태스크 컨텍스트를 시스템 프롬프트에 병합
+        system_prompt = CEO_SYSTEM
+        if team_context:
+            system_prompt = system_prompt + f"\n\n{team_context}"
+        if task_ctx_block:
+            system_prompt = system_prompt + task_ctx_block
+
         messages, _ = build_context(
-            CEO_SYSTEM, summaries, short_term, budget,
+            system_prompt, summaries, short_term, budget,
             daily_log=daily_log,
             durable_memory=durable_memory,
             retrieved_chunks=retrieved_chunks,
@@ -364,8 +388,28 @@ class CEOAgent(PicoClaw):
                 except json.JSONDecodeError:
                     pass  # not valid JSON — treat as final answer
 
-            # Final answer — persist and summarize (v3.5: config 전달로 L2/L3 기록)
+            # Final answer — persist and summarize (v3.6: team insight + task_ctx 기록)
             self.store.push_turn(session_id, "assistant", content, agent_role=self.role)
+
+            # v3.6: CEO 결정을 팀 인사이트로 기록
+            try:
+                decision_summary = content.strip()[:200].replace("\n", " ")
+                self.store.push_agent_insight(
+                    session_id=session_id,
+                    agent_role=self.role,
+                    insight_type="decision",
+                    content=decision_summary,
+                )
+            except Exception:
+                pass
+
+            # v3.6: 태스크 컨텍스트 파일에 CEO 응답 즉시 기록
+            try:
+                task_ctx = get_task_context(session_id, self.config.workspace)
+                task_ctx.append(content.strip()[:150].replace("\n", " "), agent="ceo")
+            except Exception:
+                pass
+
             await maybe_summarize(
                 self.store, self._router, session_id, self.role,
                 every_n=self.config.memory.summarize_every_n_turns,

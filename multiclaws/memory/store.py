@@ -1,5 +1,11 @@
 """
-SQLite WAL-mode store: CRUD ops, session binding, cost tracking.
+v3.6 SQLite WAL-mode store: CRUD ops, session binding, cost tracking.
+
+v3.6 변경:
+  - get_or_rebuild_short_term(): 세션 첫 접근 시 DB에서 자동 복구 (기억력 복원 핵심)
+  - push_agent_insight(): 에이전트 간 공유 인사이트 기록
+  - load_agent_insights(): CEO가 팀원 활동 인사이트 로드
+  - get_team_context(): 전 에이전트 활동 요약 (팀 성장 메모리)
 All queries are parameterized — no string interpolation.
 """
 from __future__ import annotations
@@ -20,6 +26,8 @@ class MemoryStore:
         self.db_path = str(db_path)
         self.short_term_maxlen = short_term_maxlen
         self._short_term: dict[str, deque] = {}
+        # v3.6: 세션별 첫 접근 여부 추적 (자동 복구 중복 방지)
+        self._rebuilt: set[str] = set()
         self._init_db()
 
     # ── DB init ──────────────────────────────────────────────────────────
@@ -50,6 +58,17 @@ class MemoryStore:
             self._short_term[session_id] = deque(maxlen=self.short_term_maxlen)
         return self._short_term[session_id]
 
+    def get_or_rebuild_short_term(self, session_id: str) -> deque:
+        """
+        v3.6 핵심: 세션 첫 접근 시 DB에서 자동 복구.
+        프로세스 재시작, Telegram 재연결 후에도 이전 대화 복원.
+        두 번째 접근부터는 in-memory deque 그대로 사용.
+        """
+        if session_id not in self._rebuilt:
+            self.rebuild_short_term(session_id)
+            self._rebuilt.add(session_id)
+        return self.get_short_term(session_id)
+
     def push_turn(self, session_id: str, role: str, content: str,
                   agent_role: str = "", tokens: int = 0) -> int:
         """Append turn to short-term deque AND persist to DB."""
@@ -64,7 +83,8 @@ class MemoryStore:
             return cur.lastrowid  # type: ignore[return-value]
 
     def get_context(self, session_id: str) -> list[dict]:
-        """Return short-term window for LLM context."""
+        """Return short-term window for LLM context. v3.6: 자동 복구 포함."""
+        self.get_or_rebuild_short_term(session_id)
         return list(self.get_short_term(session_id))
 
     # ── Long-term / summarization ────────────────────────────────────────
@@ -304,3 +324,49 @@ class MemoryStore:
             ).fetchall()
         for r in reversed(rows):
             st.append({"role": r["role"], "content": r["content"]})
+
+    # ── Agent insights (v3.6: 팀 유기체 성장 메모리) ───────────────────────
+    def push_agent_insight(self, session_id: str, agent_role: str,
+                           insight_type: str, content: str) -> int:
+        """
+        에이전트가 작업 완료 후 핵심 발견/결정을 공유 저장소에 기록.
+        insight_type: 'task_result' | 'decision' | 'learning' | 'preference'
+        CEO가 다음 대화 시 load_agent_insights()로 팀 전체 활동 로드.
+        """
+        with self._conn() as conn:
+            cur = conn.execute(
+                "INSERT INTO agent_insights (session_id, agent_role, insight_type, content) "
+                "VALUES (?, ?, ?, ?)",
+                (session_id, agent_role, insight_type, content),
+            )
+            return cur.lastrowid  # type: ignore[return-value]
+
+    def load_agent_insights(self, session_id: str, limit: int = 10) -> list[dict]:
+        """
+        CEO가 대화 시작 시 팀원 활동 인사이트 로드.
+        최근 limit건을 시간 순(오래된 것 먼저)으로 반환.
+        """
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT agent_role, insight_type, content, ts FROM agent_insights "
+                "WHERE session_id=? ORDER BY id DESC LIMIT ?",
+                (session_id, limit),
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def get_team_context(self, session_id: str) -> str:
+        """
+        v3.6 팀 성장 메모리: 전 에이전트 활동 요약 문자열 반환.
+        CEO 시스템 프롬프트에 주입 — 팀 유기체 컨텍스트 제공.
+        """
+        insights = self.load_agent_insights(session_id, limit=15)
+        if not insights:
+            return ""
+        lines = ["## 팀 활동 컨텍스트 (최근 인사이트)\n"]
+        for item in insights:
+            ts_short = item["ts"][:16] if item.get("ts") else ""
+            role = item.get("agent_role", "unknown")
+            itype = item.get("insight_type", "")
+            content = item.get("content", "")
+            lines.append(f"- [{ts_short}] **{role}** ({itype}): {content}")
+        return "\n".join(lines)

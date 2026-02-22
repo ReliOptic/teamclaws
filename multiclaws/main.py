@@ -1,6 +1,13 @@
 """
 Entry point: starts Watchdog + registers all agents + starts comm adapter.
 python -m multiclaws  OR  teamclaws chat
+
+v3.6 changes:
+  - session_id persisted across restarts (local_user → DB lookup)
+  - run_chat() uses get_or_rebuild_short_term() for auto memory recovery
+  - team_context injected into CEO system prompt
+  - task_context (INSTRUNCTION.md style) updated each turn
+  - banner updated to v3.6
 """
 from __future__ import annotations
 
@@ -45,6 +52,7 @@ async def run_chat(config=None) -> None:
     from multiclaws.llm.router import LLMRouter
     from multiclaws.memory.context_builder import build_context
     from multiclaws.memory.summarizer import maybe_summarize
+    from multiclaws.memory.task_context import get_task_context
     from multiclaws.roles.ceo import CEO_SYSTEM, CreatePlanTool
     from multiclaws.roles.cfo import CFO
     from multiclaws.roles.cso import CSO
@@ -115,11 +123,19 @@ async def run_chat(config=None) -> None:
 
     registry.register(CreatePlanTool(store=store))
 
-    session_id = store.make_session_id("cli", "local_user")
+    # v3.6: 세션 연속성 — 이전 CLI 세션 자동 재개
+    # find_latest_session으로 local_user의 최근 세션 복구
+    _default_sid = store.make_session_id("cli", "local_user")
+    _existing = store.find_latest_session("local_user")
+    session_id = _existing if _existing else _default_sid
+
+    # v3.6: 세션 첫 접근 시 DB에서 단기 메모리 자동 복구
+    store.get_or_rebuild_short_term(session_id)
+
     tools  = get_tools_for_role("ceo")
     budget = cfg.agent_budget("ceo")
 
-    print_banner("v3.4 Boardroom", router.available_providers())
+    print_banner("v3.6 Boardroom", router.available_providers())
 
     while True:
         try:
@@ -153,10 +169,65 @@ async def run_chat(config=None) -> None:
         # Persist Chairman's message
         store.push_turn(session_id, "user", line, agent_role="ceo")
 
-        # Build token-budgeted context
+        # v3.6: 태스크 컨텍스트 즉시 기록 (INSTRUNCTION.md 방식)
+        try:
+            task_ctx = get_task_context(session_id, cfg.workspace)
+            task_ctx.append(f"Chairman: {line[:120]}", agent="chairman")
+        except Exception:
+            task_ctx = None
+
+        # v3.6: 4계층 메모리 풀 로드
         summaries  = store.load_latest_summaries(session_id)
-        short_term = store.get_context(session_id)
-        messages, _ = build_context(CEO_SYSTEM, summaries, short_term, budget)
+        short_term = store.get_context(session_id)  # 자동 복구 포함
+
+        # L3 Durable Memory
+        durable_memory = ""
+        try:
+            from multiclaws.memory.durable_memory import load_durable_memory
+            durable_memory = load_durable_memory(cfg)
+        except Exception:
+            pass
+
+        # L2 Daily Log
+        daily_log = ""
+        try:
+            from multiclaws.memory.daily_log import load_recent_daily_logs
+            daily_log = load_recent_daily_logs(cfg, n_days=2)
+        except Exception:
+            pass
+
+        # Hybrid FTS5 retrieval
+        retrieved_chunks: list[str] = []
+        try:
+            from multiclaws.memory.retriever import HybridRetriever
+            retriever = HybridRetriever(store)
+            ret_result = retriever.search_all_context(line, session_id)
+            retrieved_chunks = ret_result.get("memory_chunks", [])
+        except Exception:
+            pass
+
+        # v3.6: 팀 활동 컨텍스트 주입
+        team_context = ""
+        try:
+            team_context = store.get_team_context(session_id)
+        except Exception:
+            pass
+
+        # 시스템 프롬프트 조합
+        system_prompt = CEO_SYSTEM
+        if team_context:
+            system_prompt = system_prompt + f"\n\n{team_context}"
+        if task_ctx:
+            task_ctx_block = task_ctx.as_system_block()
+            if task_ctx_block:
+                system_prompt = system_prompt + task_ctx_block
+
+        messages, _ = build_context(
+            system_prompt, summaries, short_term, budget,
+            daily_log=daily_log,
+            durable_memory=durable_memory,
+            retrieved_chunks=retrieved_chunks,
+        )
 
         try:
             total_cost   = 0.0
@@ -199,8 +270,17 @@ async def run_chat(config=None) -> None:
                 print_response(content, total_cost, last_latency, last_model)
                 store.push_turn(session_id, "assistant", content, agent_role="ceo",
                                 tokens=resp.output_tokens)
+
+                # v3.6: CEO 응답을 태스크 컨텍스트에 즉시 기록
+                try:
+                    if task_ctx:
+                        task_ctx.append(content.strip()[:150].replace("\n", " "), agent="ceo")
+                except Exception:
+                    pass
+
                 await maybe_summarize(store, router, session_id, "ceo",
-                                      every_n=cfg.memory.summarize_every_n_turns)
+                                      every_n=cfg.memory.summarize_every_n_turns,
+                                      config=cfg)
                 break
 
         except Exception as exc:
@@ -228,6 +308,193 @@ def run_watchdog(config=None) -> None:
     stop_event.wait()
     wd.stop_all()
     log.info("Watchdog stopped cleanly.")
+
+
+async def run_telegram_bot(config=None) -> None:
+    """
+    v3.6: Telegram bot with full session continuity.
+    - session_id = make_session_id("telegram", str(user_id))
+    - auto memory rebuild on first message (프로세스 재시작 후 복원)
+    - team context injected per-user
+    """
+    cfg = config or get_config()
+    if not cfg.telegram_token:
+        log.warning("TELEGRAM_BOT_TOKEN not set — Telegram adapter disabled")
+        return
+
+    store = MemoryStore(cfg.memory.db_path, cfg.memory.short_term_maxlen)
+
+    from multiclaws.llm.router import LLMRouter
+    from multiclaws.memory.context_builder import build_context
+    from multiclaws.memory.summarizer import maybe_summarize
+    from multiclaws.memory.task_context import get_task_context
+    from multiclaws.roles.ceo import CEO_SYSTEM, CreatePlanTool
+    from multiclaws.roles.cfo import CFO
+    from multiclaws.roles.cso import CSO
+    from multiclaws.roles.permissions import get_tools_for_role
+    from multiclaws.tools.builtins.delegate import DelegateTaskTool
+    from multiclaws.tools.registry import get_registry
+
+    router = LLMRouter(cfg, store)
+    cfo    = CFO(cfg, store)
+    cso    = CSO(store)
+    registry = get_registry()
+    tools  = get_tools_for_role("ceo")
+    budget = cfg.agent_budget("ceo")
+
+    # ── Dispatch helper (same as run_chat) ───────────────────────────────
+    async def _dispatch(agent_role: str, task: dict) -> dict:
+        from multiclaws.roles.coder import CoderAgent
+        from multiclaws.roles.communicator import CommunicatorAgent
+        from multiclaws.roles.researcher import ResearcherAgent
+
+        agent_map = {
+            "cto":          CoderAgent,
+            "coder":        CoderAgent,
+            "cko":          ResearcherAgent,
+            "researcher":   ResearcherAgent,
+            "communicator": CommunicatorAgent,
+        }
+        cls = agent_map.get(agent_role)
+        if cls is None:
+            return {"error": f"Unknown expert: '{agent_role}'."}
+        cfo_dec = cfo.allocate(json.dumps(task), agent_role)
+        if not cfo_dec.approved:
+            return {"error": f"CFO veto: {cfo_dec.reason}"}
+        cso_dec = cso.review(json.dumps(task), agent_role=agent_role)
+        if not cso_dec.approved:
+            return {"error": f"CSO veto: {'; '.join(cso_dec.findings)}"}
+        expert = cls(config=cfg)
+        expert._store  = store
+        expert._router = LLMRouter(cfg, store)
+        task = {**task, "_task_type": cfo_dec.task_type, "_max_tokens": cfo_dec.max_tokens}
+        return await expert.handle_task(task)
+
+    delegate_tool = registry.get("delegate_task")
+    if isinstance(delegate_tool, DelegateTaskTool):
+        delegate_tool._dispatcher = _dispatch
+
+    registry.register(CreatePlanTool(store=store))
+
+    # ── Message handler — called by TelegramAdapter per-message ──────────
+    async def _handle_message(platform: str, user_id: str, text: str) -> str:
+        """
+        v3.6 session continuity:
+        - session_id = telegram:{user_id}:default (고정 — 재연결 후 동일 세션)
+        - get_or_rebuild_short_term() — 첫 접근 시 DB에서 자동 복구
+        """
+        session_id = store.make_session_id(platform, user_id)
+
+        # v3.6 핵심: 세션 첫 접근 시 자동 복구
+        store.get_or_rebuild_short_term(session_id)
+        store.push_turn(session_id, "user", text, agent_role="ceo")
+
+        # 태스크 컨텍스트 즉시 기록
+        task_ctx = None
+        try:
+            task_ctx = get_task_context(session_id, cfg.workspace)
+            task_ctx.append(f"Chairman (tg): {text[:120]}", agent="chairman")
+        except Exception:
+            pass
+
+        # 4계층 메모리 로드
+        summaries  = store.load_latest_summaries(session_id)
+        short_term = store.get_context(session_id)
+
+        durable_memory = ""
+        try:
+            from multiclaws.memory.durable_memory import load_durable_memory
+            durable_memory = load_durable_memory(cfg)
+        except Exception:
+            pass
+
+        daily_log = ""
+        try:
+            from multiclaws.memory.daily_log import load_recent_daily_logs
+            daily_log = load_recent_daily_logs(cfg, n_days=2)
+        except Exception:
+            pass
+
+        retrieved_chunks: list[str] = []
+        try:
+            from multiclaws.memory.retriever import HybridRetriever
+            retrieved_chunks = HybridRetriever(store).search_all_context(
+                text, session_id
+            ).get("memory_chunks", [])
+        except Exception:
+            pass
+
+        team_context = ""
+        try:
+            team_context = store.get_team_context(session_id)
+        except Exception:
+            pass
+
+        system_prompt = CEO_SYSTEM
+        if team_context:
+            system_prompt += f"\n\n{team_context}"
+        if task_ctx:
+            block = task_ctx.as_system_block()
+            if block:
+                system_prompt += block
+
+        messages, _ = build_context(
+            system_prompt, summaries, short_term, budget,
+            daily_log=daily_log,
+            durable_memory=durable_memory,
+            retrieved_chunks=retrieved_chunks,
+        )
+
+        # React loop
+        for _ in range(cfg.max_tool_iterations):
+            resp = await router.complete_full(
+                messages=messages,
+                agent_role="ceo",
+                task_type="complex",
+                max_tokens=budget.max_output_tokens,
+            )
+            content = resp.content
+
+            if content.strip().startswith("{") and '"tool"' in content:
+                try:
+                    tool_call = json.loads(content)
+                    tool_result = await registry.execute(
+                        tool_call.get("tool", ""), tool_call.get("args", {}),
+                        "ceo", tools, audit_fn=store.audit,
+                    )
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({"role": "tool", "content": json.dumps(tool_result)})
+                    continue
+                except json.JSONDecodeError:
+                    pass
+
+            # Final answer
+            store.push_turn(session_id, "assistant", content, agent_role="ceo",
+                            tokens=resp.output_tokens)
+            try:
+                if task_ctx:
+                    task_ctx.append(content.strip()[:150].replace("\n", " "), agent="ceo")
+                store.push_agent_insight(
+                    session_id=session_id, agent_role="ceo",
+                    insight_type="decision",
+                    content=content.strip()[:200].replace("\n", " "),
+                )
+            except Exception:
+                pass
+            await maybe_summarize(store, router, session_id, "ceo",
+                                  every_n=cfg.memory.summarize_every_n_turns,
+                                  config=cfg)
+            return content
+
+        return "(No response from CEO)"
+
+    from multiclaws.comm.telegram_adapter import TelegramAdapter
+    adapter = TelegramAdapter(
+        token=cfg.telegram_token,
+        allowed_users=cfg.telegram_allowed_users or None,
+    )
+    log.info("Starting Telegram bot (v3.6 session continuity)...")
+    await adapter.start(_handle_message)
 
 
 def run_preset(preset_name: str, user_input: str, config=None) -> None:

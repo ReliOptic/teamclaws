@@ -1,4 +1,4 @@
-"""Communicator PicoClaw: message relay. (§6-2)"""
+"""Communicator PicoClaw: message relay. (v3.6: team insight recording)"""
 from __future__ import annotations
 
 from typing import Any
@@ -24,6 +24,7 @@ class CommunicatorAgent(PicoClaw):
 
     async def handle_task(self, task: dict[str, Any]) -> dict[str, Any]:
         content_req = task.get("content", task.get("message", ""))
+        session_id  = task.get("session_id", "communicator:default")
         tone = task.get("tone", "professional")
 
         messages = [
@@ -36,4 +37,18 @@ class CommunicatorAgent(PicoClaw):
             agent_role=self.role,
             task_type="fast",
         )
+
+        # v3.6: 팀 유기체 성장 — 커뮤니케이션 결과를 공유 인사이트로 기록
+        if self.store and content:
+            try:
+                summary = content.strip()[:150].replace("\n", " ")
+                self.store.push_agent_insight(
+                    session_id=session_id,
+                    agent_role=self.role,
+                    insight_type="task_result",
+                    content=f"메시지 작성 완료 (tone={tone}): {summary}",
+                )
+            except Exception:
+                pass  # 인사이트 기록 실패는 태스크 실패로 이어지지 않음
+
         return {"result": content}

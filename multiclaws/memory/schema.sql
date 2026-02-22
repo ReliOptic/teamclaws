@@ -114,6 +114,23 @@ CREATE TABLE IF NOT EXISTS cost_log (
 CREATE INDEX IF NOT EXISTS idx_cost_ts ON cost_log(ts);
 
 -- ─────────────────────────────────────────
+-- AGENT INSIGHTS  (v3.6: 팀 유기체 성장 메모리)
+-- 에이전트 간 공유 인사이트: 작업 완료 시 핵심 발견/결정 기록
+-- CEO가 다음 대화 시 팀 전체 활동 컨텍스트 로드
+-- ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS agent_insights (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      TEXT    NOT NULL,
+    agent_role      TEXT    NOT NULL,   -- 기록한 에이전트 (ceo, coder, researcher 등)
+    insight_type    TEXT    NOT NULL    -- 'task_result' | 'decision' | 'learning' | 'preference'
+                    CHECK(insight_type IN ('task_result','decision','learning','preference')),
+    content         TEXT    NOT NULL,   -- 인사이트 내용 (마크다운)
+    ts              TEXT    DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_insights_session ON agent_insights(session_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_insights_agent ON agent_insights(agent_role, ts DESC);
+
+-- ─────────────────────────────────────────
 -- SECURITY AUDIT LOG
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS audit_log (

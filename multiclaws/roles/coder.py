@@ -1,4 +1,4 @@
-"""Coder PicoClaw: file I/O + code execution. (§6-2)"""
+"""Coder PicoClaw: file I/O + code execution. (v3.6: team insight recording)"""
 from __future__ import annotations
 
 import json
@@ -74,5 +74,18 @@ class CoderAgent(PicoClaw):
 
             # Final answer (plain text)
             break
+
+        # v3.6: 팀 유기체 성장 — 코딩 결과를 공유 인사이트로 기록
+        if self.store and content:
+            try:
+                summary = content.strip()[:200].replace("\n", " ")
+                self.store.push_agent_insight(
+                    session_id=session_id,
+                    agent_role=self.role,
+                    insight_type="task_result",
+                    content=f"코딩 완료 — {instruction[:80]!r}: {summary}",
+                )
+            except Exception:
+                pass  # 인사이트 기록 실패는 태스크 실패로 이어지지 않음
 
         return {"result": content, "instruction": instruction}
